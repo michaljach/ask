@@ -38,7 +38,8 @@ let body = await r.text();
 check("GET / is short", body.split("\n").length < 28, `${body.split("\n").length} lines`);
 check("GET / is runnable shell", body.startsWith(": <<'___'") && body.trimEnd().endsWith("/s | sh"));
 check("GET / heredoc is closed", body.includes("\n___\n"));
-check("GET / shows the banner", body.includes("\u2588\u2580\u2580\u2588"));
+check("GET / shows the banner", body.includes("\u2588\u2588\u2588\u2588"));
+check("banner uses no half blocks", !/[\u2580\u2584]/.test(body), "half blocks fuse in some fonts");
 check("GET / is readable text", body.includes("ask an LLM from a terminal"));
 
 r = await get("/help");
