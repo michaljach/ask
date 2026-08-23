@@ -1,0 +1,17 @@
+{
+  "name": "ask",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Ask an LLM from a terminal that has nothing but curl",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "test": "node test/worker.test.mjs",
+    "stub": "node dev/stub.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.36.0"
+  }
+}

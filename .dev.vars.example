@@ -1,0 +1,6 @@
+# Copy to .dev.vars for local `npm run dev`. Never commit .dev.vars.
+GROQ_API_KEY=gsk_...
+# ANTHROPIC_API_KEY=sk-ant-...
+# ASK_TOKEN=some-shared-secret-to-make-this-private
+# Point at any OpenAI-compatible endpoint (ollama, llama.cpp, vLLM) and use m=custom:<model>
+# ASK_CUSTOM_BASE=http://192.168.1.10:11434/v1

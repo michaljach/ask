@@ -1,0 +1,28 @@
+name = "ask"
+main = "src/index.js"
+compatibility_date = "2026-08-23"
+workers_dev = true
+
+# Custom domain. wrangler creates the proxied DNS record and the edge cert on
+# deploy, as long as the zone is on the same Cloudflare account.
+routes = [
+  { pattern = "ai.jach.me", custom_domain = true }
+]
+
+# Per-IP rate limit, free on Workers. period must be 10 or 60.
+[[ratelimits]]
+name = "ASK_RATE_LIMIT"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
+[vars]
+ASK_PROVIDER = "groq"
+ASK_MODEL = "fast"
+
+# Secrets are not set here. Set them with:
+#   npx wrangler secret put GROQ_API_KEY
+# Optional: ANTHROPIC_API_KEY, OPENROUTER_API_KEY, CEREBRAS_API_KEY, ...
+# Optional: ASK_TOKEN to make the instance private.
