@@ -5,7 +5,7 @@ import { TURN_MARK } from "./prompt.js";
 //   curl -s <origin>/repl | sh
 // Nothing is written to disk except a transcript in a temp file, removed on exit.
 // Questions are read from /dev/tty because stdin is the pipe carrying this script.
-export function replScript(origin) {
+export function replScript(origin, model) {
   return `#!/bin/sh
 # ask - a question/answer session over curl. Quit with a blank line or ctrl-d.
 HOST="${origin}"
@@ -21,7 +21,8 @@ trap 'rm -f "$T"' EXIT HUP INT TERM
 
 cat > /dev/tty <<'ASK_BANNER_END'
 ${BANNER}ASK_BANNER_END
-printf 'session on %s - follow-ups remember what was said\\n' "$HOST" > /dev/tty
+printf 'session on %s\\n' "$HOST" > /dev/tty
+printf 'answering with ${model} - follow-ups remember what was said\\n' > /dev/tty
 printf 'blank line or ctrl-d quits\\n\\n' > /dev/tty
 
 while :; do

@@ -41,6 +41,8 @@ check("GET / heredoc is closed", body.includes("\n___\n"));
 check("GET / shows the banner", body.includes("\u2588\u2588\u2588\u2588"));
 check("banner uses no half blocks", !/[\u2580\u2584]/.test(body), "half blocks fuse in some fonts");
 check("GET / is readable text", body.includes("ask an LLM from a terminal"));
+check("GET / names the model in use", body.includes("answering with groq openai/gpt-oss-20b"), body.split("\n").find((l) => l.startsWith("answering")));
+check("banner has blank lines above and below", /\n\n \u2588\u2588\u2588\u2588\u2588\u2588/.test(body) && /\u2588\n\nask an LLM/.test(body));
 
 r = await get("/help");
 body = await r.text();
@@ -48,7 +50,9 @@ check("GET /help is the long form", !body.startsWith(":") && body.includes("BRIN
 r = await get("/health");
 check("GET /health", (await r.text()) === "ok\n");
 r = await get("/models");
-check("GET /models lists aliases", (await r.text()).includes("groq:openai/gpt-oss-20b"));
+body = await r.text();
+check("GET /models lists aliases", body.includes("groq:openai/gpt-oss-20b"));
+check("GET /models marks the default", /fast\s+groq:openai\/gpt-oss-20b\s+\(default\)/.test(body), body.split("\n")[0]);
 r = await get("/robots.txt");
 check("robots.txt disallows", (await r.text()).includes("Disallow: /"));
 r = await get("/favicon.ico");
@@ -268,6 +272,7 @@ check("/s is the short alias for /repl", (await r.text()).startsWith("#!/bin/sh"
 r = await get("/repl");
 body = await r.text();
 check("/repl serves a sh script", body.startsWith("#!/bin/sh") && body.includes("ask> "));
+check("/repl banner names the model", body.includes("answering with groq openai/gpt-oss-20b"));
 check("/repl prints the banner via a quoted heredoc", body.includes("ASK_BANNER_END"));
 check("/repl embeds the host it was fetched from", body.includes('HOST="https://ask.dev"'));
 check("/repl marker matches the parser", body.includes('">>> $q"') || body.includes(">>> "), "marker mismatch");

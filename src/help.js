@@ -17,12 +17,12 @@ export function scriptOrigin(url) {
 // inside, so the $* and | in the examples survive) and runs the last line. The
 // two shell markers are unavoidable - the request is identical either way.
 // Keep this short: it is the first thing anyone sees. Everything else is /help.
-export function rootScript(url) {
+export function rootScript(url, model) {
   const h = url.host || "ask.example.workers.dev";
   const origin = scriptOrigin(url);
   return `: <<'___'
-${BANNER}
-ask an LLM from a terminal that has nothing but curl
+${BANNER}ask an LLM from a terminal that has nothing but curl
+answering with ${model}
 
   curl -s ${h} | sh                       a session, until you quit
   curl ${h} -d "why wont pacstrap work"   one question
@@ -36,15 +36,15 @@ curl -s ${origin}/s | sh
 `;
 }
 
-export function help(url) {
+export function help(url, model) {
   const h = url.host || "ask.example.workers.dev";
   const origin = scriptOrigin(url);
   const aliases = Object.entries(ALIASES)
     .map(([name, a]) => `  ${name.padEnd(7)} ${a.provider}:${a.model}`)
     .join("\n");
 
-  return `${BANNER}
-ask - ask an LLM from a terminal that has nothing but curl
+  return `${BANNER}ask - ask an LLM from a terminal that has nothing but curl
+answering with ${model}
 
 A SESSION - one line, nothing installed
 

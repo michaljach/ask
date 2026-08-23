@@ -50,6 +50,17 @@ function withBase(resolved, env) {
   return { ...resolved, base: base.replace(/\/+$/, "") };
 }
 
+// What this instance answers with when no m= is given, for the docs and the session
+// banner. Never throws: a misconfigured default should not take down the help page.
+export function defaultModel(env) {
+  try {
+    const { provider, model } = resolveModel("", env);
+    return `${provider} ${model}`;
+  } catch {
+    return "not configured";
+  }
+}
+
 export class HttpError extends Error {
   constructor(status, message) {
     super(message);
