@@ -1,5 +1,6 @@
 import { ALIASES, HttpError, apiKeyFor, ask, defaultModel, resolveModel } from "./providers.js";
 import { clientScript } from "./client.js";
+import { palette, wantsColor } from "./color.js";
 import { TURN_MARK, buildChatMessages, buildMessages } from "./prompt.js";
 import { replScript } from "./repl.js";
 import { help, rootScript, scriptOrigin } from "./help.js";
@@ -38,12 +39,14 @@ async function route(request, env) {
   if (slug === "sh") return text(clientScript(scriptOrigin(url)));
   // /s is the short alias; typing it is the whole point.
   if (slug === "repl" || slug === "s") return text(replScript(scriptOrigin(url), defaultModel(env)));
+  const c = palette(wantsColor(request, params));
+
   if (slug === "models") {
     const current = defaultModel(env);
     const lines = Object.entries(ALIASES).map(([n, a]) => {
       const id = `${a.provider}:${a.model}`;
-      const mark = `${a.provider} ${a.model}` === current ? "  (default)" : "";
-      return `${n.padEnd(7)} ${id}${mark}`;
+      const isDefault = `${a.provider} ${a.model}` === current;
+      return `${c.cmd(n.padEnd(7))} ${id}${isDefault ? c.note("  (default)") : ""}`;
     });
     return text(lines.join("\n") + "\n");
   }
@@ -59,9 +62,9 @@ async function route(request, env) {
   // Bare root is the short page, and is also a runnable session script.
   if (!chat && !question) {
     const model = defaultModel(env);
-    return text(slug === "help" ? help(url, model) : rootScript(url, model));
+    return text(slug === "help" ? help(url, model, c) : rootScript(url, model, c));
   }
-  if (!chat && slug === "help") return text(help(url, defaultModel(env)));
+  if (!chat && slug === "help") return text(help(url, defaultModel(env), c));
 
   // A private deployment can require a shared token. Unset by default.
   if (env.ASK_TOKEN) {

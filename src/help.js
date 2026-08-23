@@ -17,36 +17,42 @@ export function scriptOrigin(url) {
 // inside, so the $* and | in the examples survive) and runs the last line. The
 // two shell markers are unavoidable - the request is identical either way.
 // Keep this short: it is the first thing anyone sees. Everything else is /help.
-export function rootScript(url, model) {
+export function rootScript(url, model, c) {
   const h = url.host || "ask.example.workers.dev";
   const origin = scriptOrigin(url);
   return `: <<'___'
-${BANNER}ask an LLM from a terminal that has nothing but curl
-answering with ${model}
 
-  curl -s ${h} | sh                       a session, until you quit
-  curl ${h} -d "why wont pacstrap work"   one question
+${c.banner(BANNER)}
 
-  curl ${h}/help    models, options, bring-your-own-key, everything else
+ask an LLM from a terminal that has nothing but curl
+${c.note(`answering with ${model}`)}
 
-Answers come from an LLM and will sometimes be wrong. Read any command that
-touches a disk before you run it.
+  ${c.cmd(`curl -s ${h} | sh`)}                       ${c.note("a session, until you quit")}
+  ${c.cmd(`curl ${h} -d "why wont pacstrap work"`)}   ${c.note("one question")}
+
+  ${c.cmd(`curl ${h}/help`)}    ${c.note("models, options, bring-your-own-key, everything else")}
+
+${c.note("Answers come from an LLM and will sometimes be wrong. Read any command that")}
+${c.note("touches a disk before you run it.")}
 ___
 curl -s ${origin}/s | sh
 `;
 }
 
-export function help(url, model) {
+export function help(url, model, c) {
   const h = url.host || "ask.example.workers.dev";
   const origin = scriptOrigin(url);
   const aliases = Object.entries(ALIASES)
     .map(([name, a]) => `  ${name.padEnd(7)} ${a.provider}:${a.model}`)
     .join("\n");
 
-  return `${BANNER}ask - ask an LLM from a terminal that has nothing but curl
-answering with ${model}
+  return `
+${c.banner(BANNER)}
 
-A SESSION - one line, nothing installed
+ask - ask an LLM from a terminal that has nothing but curl
+${c.note(`answering with ${model}`)}
+
+${c.head("A SESSION")} - one line, nothing installed
 
   curl -s ${h} | sh
 
@@ -54,7 +60,7 @@ A SESSION - one line, nothing installed
   i format it" works. Blank line or ctrl-d quits. This runs a short shell script
   served by this host - read it first with: curl ${h}/s
 
-ONE QUESTION
+${c.head("ONE QUESTION")}
 
   curl ${h} -d "why wont pacstrap work"
   curl -G ${h} --data-urlencode "q=why wont pacstrap work"
@@ -63,14 +69,14 @@ ONE QUESTION
   A question can also go in the path, but curl rejects literal spaces in a URL,
   so it needs + or %20: ${h}/why+wont+pacstrap+work
 
-PIPE IN CONTEXT
+${c.head("PIPE IN CONTEXT")}
 
   Anything you POST alongside a question is read as terminal output:
 
   curl ${h} --data-binary @/etc/fstab -H "X-Ask: is this fstab valid"
   journalctl -xb | curl ${h} --data-binary @- -H "X-Ask: why did boot fail"
 
-OPTIONS  (query string)
+${c.head("OPTIONS  (query string)")}
   q=...     the question
   m=...     model: an alias below, provider:model, or a bare model id
   n=1       no streaming, wait and print the whole answer at once
@@ -78,30 +84,30 @@ OPTIONS  (query string)
   think=1   also print the model's reasoning, if it exposes any
   c=1       the body is a session transcript, not terminal output
 
-MODELS
+${c.head("MODELS")}
 ${aliases}
 
   curl "${h}/why+wont+pacstrap+work?m=smart"
 
-BRING YOUR OWN KEY
+${c.head("BRING YOUR OWN KEY")}
   Skips this instance's rate limit and bills your own account:
   curl ${h} -d "explain inodes" -H "X-Ask-Key: gsk_..."
 
-OPTIONAL - a client script, if you would rather not type curl at all
+${c.head("OPTIONAL")} - a client script, if you would rather not type curl at all
   curl ${h}/sh > /usr/local/bin/ask && chmod +x /usr/local/bin/ask
   ask why wont pacstrap work
 
   Or for this shell only, no file, no root:
   ask() { curl -sN -G ${origin} --data-urlencode "q=$*"; }
 
-OTHER
+${c.head("OTHER")}
   curl ${h}/s         just the session script (this page runs it for you)
   curl ${h}/help      this text without the shell wrapper
   curl ${h}/sh        the one-shot client script
   curl ${h}/models    list the aliases above
   curl ${h}/health    liveness check
 
-Answers come from an LLM. It will be confidently wrong sometimes. Read any
-command that touches a disk before you run it.
+${c.note("Answers come from an LLM. It will be confidently wrong sometimes. Read any")}
+${c.note("command that touches a disk before you run it.")}
 `;
 }
