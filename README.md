@@ -113,6 +113,7 @@ ask() { curl -sN -G https://ask.example.com --data-urlencode "q=$*"; }
 | `m=...` | model: an alias, `provider:model`, or a bare model id |
 | `n=1` | no streaming, print the whole answer at once |
 | `t=800` | max tokens in the answer (capped at 4000) |
+| `web=1` | let the model search the web before answering |
 | `think=1` | also print the model's reasoning, if it exposes any |
 | `c=1` | the body is a session transcript, not terminal output |
 
@@ -129,9 +130,10 @@ The installed client takes `-m` before the question: `ask -m smart why wont pacs
 | Alias | Resolves to |
 |---|---|
 | `fast` | `groq:openai/gpt-oss-20b` |
-| `smart` | `groq:openai/gpt-oss-120b` (default) |
+| `smart` | `groq:openai/gpt-oss-120b` |
 | `think` | `groq:openai/gpt-oss-120b`, high reasoning effort |
 | `qwen` | `groq:qwen/qwen3.6-27b` |
+| `web` | `groq:openai/gpt-oss-120b` with Groq's built-in `browser_search` (default) |
 | `claude` | `anthropic:claude-opus-5` |
 
 `curl ask.example.com/models` lists them. `m=` also takes `provider:model`
@@ -143,6 +145,21 @@ curl -G ask.example.com --data-urlencode "q=hi" -d "m=groq:openai/gpt-oss-120b"
 
 Model ids go stale. Ask the provider what it serves today:
 `curl -H "Authorization: Bearer $GROQ_API_KEY" https://api.groq.com/openai/v1/models`
+
+### Web search
+
+`web=1` lets the model look things up before answering, which is the whole point
+when the reason you are at a bare terminal is that you have no browser:
+
+```sh
+curl "ask.example.com/?web=1" -d "what is the latest stable kernel"
+```
+
+It runs Groq's built-in `browser_search`, which only the `gpt-oss` family accepts —
+qwen rejects built-in tools outright — so `web=1` switches model for you, and asking
+for search on a model that cannot do it returns a clear 400 rather than forwarding a
+cryptic upstream error. Results come back cited in CJK brackets, which get stripped
+along with any `<think>` blocks.
 
 ## Providers
 

@@ -32,6 +32,9 @@ export const ALIASES = {
   // spends the whole answer budget deliberating and gets truncated mid-thought.
   qwen:   { provider: "groq",      model: "qwen/qwen3.6-27b",     effort: "none" },
   claude: { provider: "anthropic", model: "claude-opus-5",       effort: "low" },
+  // Groq's built-in browser_search, which only the gpt-oss family accepts - qwen
+  // rejects built-in tools outright, so asking for search switches model.
+  web:    { provider: "groq",      model: "openai/gpt-oss-120b",  effort: "low", search: true },
 };
 
 // "fast" | "groq:openai/gpt-oss-120b" | "claude-opus-5" (bare model, default provider)
@@ -64,8 +67,8 @@ function withBase(resolved, env) {
 // banner. Never throws: a misconfigured default should not take down the help page.
 export function defaultModel(env) {
   try {
-    const { provider, model } = resolveModel("", env);
-    return `${provider} ${model}`;
+    const { provider, model, search } = resolveModel("", env);
+    return `${provider} ${model}${search ? " + web search" : ""}`;
   } catch {
     return "not configured";
   }
@@ -77,6 +80,12 @@ export function defaultModel(env) {
 export function defaultAlias(env) {
   const want = (env.ASK_MODEL || "fast").trim();
   return ALIASES[want] ? want : null;
+}
+
+// Groq's browser_search is a built-in tool the gpt-oss family accepts; everything
+// else 400s on it, so say so up front rather than forwarding a cryptic upstream error.
+export function searchCapable(model) {
+  return /gpt-oss/.test(model);
 }
 
 export class HttpError extends Error {
@@ -106,7 +115,7 @@ export async function ask(opts) {
   return spec.kind === "anthropic" ? askAnthropic(opts) : askOpenAICompat(opts);
 }
 
-async function askOpenAICompat({ provider, base, model, effort, messages, stream, maxTokens, key, signal, showThinking, prefix }) {
+async function askOpenAICompat({ provider, base, model, effort, messages, stream, maxTokens, key, signal, showThinking, prefix, search }) {
   const body = {
     model,
     messages: [{ role: "system", content: systemPrompt(new Date()) }, ...messages],
@@ -117,6 +126,7 @@ async function askOpenAICompat({ provider, base, model, effort, messages, stream
   // differ per family (gpt-oss: low/medium/high, qwen3: none/default), so the alias
   // carries the value and this just decides whether to send it at all.
   if (effort && /gpt-oss|qwen3/.test(model)) body.reasoning_effort = effort;
+  if (search) body.tools = [{ type: "browser_search" }];
 
   const headers = { "content-type": "application/json" };
   if (key) headers.authorization = `Bearer ${key}`;
@@ -129,12 +139,12 @@ async function askOpenAICompat({ provider, base, model, effort, messages, stream
   });
 
   await throwIfUpstreamError(res, provider);
-  const strip = showThinking ? (t) => t : thinkStripper();
+  const strip = showThinking ? (t) => t : contentFilter();
 
   if (!stream) {
     const json = await readJson(res, provider);
     const raw = json.choices?.[0]?.message?.content || "";
-    const out = showThinking ? raw : stripThinkBlocks(raw);
+    const out = showThinking ? raw : stripArtifacts(raw);
     return { text: out.trim() ? out : "(empty response)\n" };
   }
 
@@ -231,57 +241,73 @@ async function throwIfUpstreamError(res, provider) {
   throw new HttpError(status, `${provider} said ${res.status}: ${detail}`);
 }
 
-// Some reasoning models (qwen3, the r1 distills) put their chain of thought in the
-// content stream wrapped in <think> tags rather than in a separate field. Nobody at
-// a terminal wants 40 lines of deliberation before one command, so strip it. Stateful
-// and streaming: a tag can be split across chunks, so hold back any tail that could
-// still turn out to be the start of one.
-const OPEN = "<think>";
-const CLOSE = "</think>";
+// Two kinds of artefact have to be kept out of a terminal:
+//
+//   <think>...</think>  some reasoning models (qwen3, the r1 distills) put their
+//                       chain of thought in the content stream rather than in a
+//                       separate field, which buries the answer.
+//   U+3010...U+3011     browser_search results come back cited as [1..L22-L26] in
+//                       CJK brackets, which is noise you cannot click.
+//
+// Both are "suppress everything between these markers", and either marker can be
+// split across SSE chunks, so hold back any tail that could still open one.
+const SPANS = [
+  { open: "<think>", close: "</think>", trimAfter: true },
+  { open: "\u3010", close: "\u3011", trimAfter: false },
+];
 
-function partialTail(text, tag) {
-  for (let n = Math.min(tag.length - 1, text.length); n > 0; n--) {
-    if (tag.startsWith(text.slice(text.length - n))) return n;
+function partialTail(text, marker) {
+  for (let n = Math.min(marker.length - 1, text.length); n > 0; n--) {
+    if (marker.startsWith(text.slice(text.length - n))) return n;
   }
   return 0;
 }
 
-export function thinkStripper() {
-  let inside = false;
+export function contentFilter() {
   let carry = "";
+  let active = null;
   return (text) => {
     let rest = carry + text;
     carry = "";
     let out = "";
     for (;;) {
-      if (!inside) {
-        const at = rest.indexOf(OPEN);
+      if (active) {
+        const at = rest.indexOf(active.close);
         if (at === -1) {
-          const keep = partialTail(rest, OPEN);
-          out += rest.slice(0, rest.length - keep);
-          carry = rest.slice(rest.length - keep);
+          carry = rest.slice(rest.length - partialTail(rest, active.close));
           break;
         }
-        out += rest.slice(0, at);
-        rest = rest.slice(at + OPEN.length);
-        inside = true;
-      } else {
-        const at = rest.indexOf(CLOSE);
-        if (at === -1) {
-          carry = rest.slice(rest.length - partialTail(rest, CLOSE));
-          break;
-        }
-        // Drop the blank lines the model leaves behind after the block.
-        rest = rest.slice(at + CLOSE.length).replace(/^\s+/, "");
-        inside = false;
+        rest = rest.slice(at + active.close.length);
+        if (active.trimAfter) rest = rest.replace(/^\s+/, "");
+        active = null;
+        continue;
       }
+      let at = -1;
+      let found = null;
+      for (const span of SPANS) {
+        const i = rest.indexOf(span.open);
+        if (i !== -1 && (at === -1 || i < at)) {
+          at = i;
+          found = span;
+        }
+      }
+      if (at === -1) {
+        let keep = 0;
+        for (const span of SPANS) keep = Math.max(keep, partialTail(rest, span.open));
+        out += rest.slice(0, rest.length - keep);
+        carry = rest.slice(rest.length - keep);
+        break;
+      }
+      out += rest.slice(0, at);
+      rest = rest.slice(at + found.open.length);
+      active = found;
     }
     return out;
   };
 }
 
-export function stripThinkBlocks(text) {
-  return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
+export function stripArtifacts(text) {
+  return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").replace(/\u3010[^\u3011]*\u3011/g, "");
 }
 
 // Turn a provider's SSE body into a plain-text stream. `pick` pulls the printable

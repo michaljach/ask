@@ -269,6 +269,37 @@ stub(okStream(['data: {"choices":[{"delta":{"content":"use <thing> not a tag"}}]
 r = await get("/?q=x");
 check("a tag-lookalike passes through", (await r.text()).includes("<thing>"));
 
+// ---- web search ----
+console.log("\nweb search");
+stub(okStream(['data: {"choices":[{"delta":{"content":"kernel 7.1.10"}}]}\n\n']));
+await get("/?q=x&m=web");
+sent = captured.at(-1);
+check("web alias asks groq for browser_search", JSON.stringify(sent.body.tools) === '[{"type":"browser_search"}]', JSON.stringify(sent.body.tools));
+check("web alias uses a gpt-oss model", sent.body.model === "openai/gpt-oss-120b");
+
+await get("/?q=x&web=1");
+check("web=1 with no model picks the search-capable alias", captured.at(-1).body.model === "openai/gpt-oss-120b");
+
+await get("/?q=x");
+check("no tools sent when search was not asked for", !("tools" in captured.at(-1).body));
+
+r = await get("/?q=x&m=qwen&web=1");
+body = await r.text();
+check("search on a model that cannot do it -> clear 400", r.status === 400 && body.includes("cannot search the web; use m=web"), body.trim());
+
+stub(okStream([
+  'data: {"choices":[{"delta":{"content":"kernel 7.1.10 is latest\\u30101"}}]}\n\n',
+  'data: {"choices":[{"delta":{"content":"\\u2020L22-L26\\u3011.\\n"}}]}\n\n',
+]));
+r = await get("/?q=x&m=web");
+body = await r.text();
+check("citation brackets stripped across chunk boundaries", body === "kernel 7.1.10 is latest.\n\n", JSON.stringify(body));
+
+r = await get("/models");
+check("/models lists web", (await r.text()).includes("web"));
+r = await worker.fetch(new Request("https://ask.dev/", { headers: { "user-agent": "Mozilla/5.0" } }), { ...ENV, ASK_MODEL: "web" });
+check("a searching default says so in the docs", (await r.text()).includes("answering with groq openai/gpt-oss-120b + web search"));
+
 // ---- new providers and aliases ----
 console.log("\nproviders");
 stub(okStream(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n']));

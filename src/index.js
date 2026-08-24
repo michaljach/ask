@@ -1,4 +1,4 @@
-import { ALIASES, HttpError, apiKeyFor, ask, defaultAlias, defaultModel, resolveModel } from "./providers.js";
+import { ALIASES, HttpError, apiKeyFor, ask, defaultAlias, defaultModel, resolveModel, searchCapable } from "./providers.js";
 import { clientScript } from "./client.js";
 import { palette, wantsColor } from "./color.js";
 import { TURN_MARK, buildChatMessages, buildMessages } from "./prompt.js";
@@ -104,7 +104,14 @@ async function route(request, env) {
     return text(`ask: question is ${asked.length} chars, max is ${MAX_QUESTION}\n`, 413);
   }
 
-  const { provider, base, model, effort } = resolveModel(params.get("m") || "", env);
+  // web=1 with no explicit model picks the search-capable alias for you.
+  const askedForSearch = params.get("web") === "1";
+  const spec = params.get("m") || (askedForSearch ? "web" : "");
+  const { provider, base, model, effort, search } = resolveModel(spec, env);
+  const useSearch = Boolean(search || askedForSearch);
+  if (useSearch && !searchCapable(model)) {
+    return text(`ask: ${model} cannot search the web; use m=web\n`, 400);
+  }
   const key = apiKeyFor(provider, env, byoKey);
   const stream = !(params.get("n") === "1" || params.get("s") === "0");
   const showThinking = params.get("think") === "1";
@@ -121,6 +128,7 @@ async function route(request, env) {
     key,
     signal: request.signal,
     showThinking,
+    search: useSearch,
     prefix: notice,
   });
 

@@ -81,6 +81,7 @@ ${c.head("OPTIONS  (query string)")}
   m=...     model: an alias below, provider:model, or a bare model id
   n=1       no streaming, wait and print the whole answer at once
   t=800     max tokens in the answer
+  web=1     let the model search the web before answering
   think=1   also print the model's reasoning, if it exposes any
   c=1       the body is a session transcript, not terminal output
 
@@ -88,6 +89,7 @@ ${c.head("MODELS")}
 ${aliases}
 
   curl "${h}/why+wont+pacstrap+work?m=smart"
+  curl "${h}/?web=1" -d "what is the latest stable kernel"
 
 ${c.head("BRING YOUR OWN KEY")}
   Skips this instance's rate limit and bills your own account:
