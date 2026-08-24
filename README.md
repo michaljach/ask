@@ -133,8 +133,10 @@ The installed client takes `-m` before the question: `ask -m smart why wont pacs
 | `smart` | `groq:openai/gpt-oss-120b` |
 | `think` | `groq:openai/gpt-oss-120b`, high reasoning effort |
 | `qwen` | `groq:qwen/qwen3.6-27b` |
-| `web` | `groq:openai/gpt-oss-120b` with Groq's built-in `browser_search` (default) |
+| `web` | `groq:openai/gpt-oss-120b` with Groq's built-in `browser_search` |
 | `compound` | `groq:groq/compound`, searches natively; slower and ~1.6x the tokens |
+| `flash` | `google:gemini-3.6-flash` (default) |
+| `lite` | `google:gemini-3.1-flash-lite` |
 | `claude` | `anthropic:claude-opus-5` |
 
 `curl ask.example.com/models` lists them. `m=` also takes `provider:model`
@@ -155,6 +157,13 @@ when the reason you are at a bare terminal is that you have no browser:
 ```sh
 curl "ask.example.com/?web=1" -d "what is the latest stable kernel"
 ```
+
+**The default cannot search.** Gemini carries ordinary questions because its free
+tier is far roomier than Groq's 8,000 tokens/min and 200,000 tokens/day, but Google
+Search grounding is not reachable: the OpenAI-compatible layer rejects the tool
+outright, and the native endpoint answers `429 quota exceeded` for a grounded call on
+a free key while ungrounded calls on the same key succeed. So `web=1` routes to Groq,
+and search is bounded by Groq's daily budget.
 
 It runs Groq's built-in `browser_search`, which only the `gpt-oss` family accepts —
 qwen rejects built-in tools outright — so `web=1` switches model for you, and asking

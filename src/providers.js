@@ -39,6 +39,13 @@ export const ALIASES = {
   // sent one. Slower and roughly 1.6x the tokens of web, so it is not the default,
   // but it searches differently and is worth having for a second opinion.
   compound: { provider: "groq",    model: "groq/compound",        search: true },
+  // Gemini's free tier is far roomier than Groq's 8k tokens/min, so it carries the
+  // ordinary questions. It cannot search: Google Search grounding is not exposed
+  // through the OpenAI-compatible layer at all, and the native endpoint answers
+  // 429 quota-exceeded for a grounded call on a free key while ungrounded calls
+  // succeed. So web=1 still routes to Groq.
+  flash:  { provider: "google",    model: "gemini-3.6-flash" },
+  lite:   { provider: "google",    model: "gemini-3.1-flash-lite" },
 };
 
 // "fast" | "groq:openai/gpt-oss-120b" | "claude-opus-5" (bare model, default provider)
@@ -245,8 +252,10 @@ async function throwIfUpstreamError(res, provider) {
   const raw = await res.text();
   let detail = raw.slice(0, 400);
   try {
-    const json = JSON.parse(raw);
-    detail = json.error?.message || json.message || detail;
+    // Google wraps its errors in a single-element array; everyone else uses an object.
+    const parsed = JSON.parse(raw);
+    const json = Array.isArray(parsed) ? parsed[0] : parsed;
+    detail = json?.error?.message || json?.message || detail;
   } catch {
     /* upstream sent something that is not JSON; the raw text is the best we have */
   }

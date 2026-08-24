@@ -305,10 +305,27 @@ check("compound still gets the search prompt", sent.body.messages[0].content.inc
 await get("/?q=x&m=compound&web=1");
 check("web=1 on compound is allowed, not a 400", captured.at(-1).body.model === "groq/compound");
 
+stub(okStream(['data: {"choices":[{"delta":{"content":"lsblk"}}]}\n\n']));
+await worker.fetch(new Request("https://ask.dev/?q=x&m=flash"), { ...ENV, GEMINI_API_KEY: "k-gem" });
+sent = captured.at(-1);
+check("flash alias hits google", sent.url.startsWith("https://generativelanguage.googleapis.com/v1beta/openai/") && sent.body.model === "gemini-3.6-flash", sent.url);
+check("gemini gets no tools and no search prompt", !("tools" in sent.body) && !sent.body.messages[0].content.includes("web search tool"));
+
+// With a non-searching default, web=1 must still reach a model that can search.
+await worker.fetch(new Request("https://ask.dev/?q=x&web=1"), { ...ENV, ASK_MODEL: "flash" });
+check("web=1 escapes a non-searching default", captured.at(-1).body.model === "openai/gpt-oss-120b", captured.at(-1).body.model);
+
+stub(() => new Response(JSON.stringify([{ error: { code: 404, message: "model not found" } }]), { status: 404 }));
+r = await worker.fetch(new Request("https://ask.dev/?q=x&m=flash"), { ...ENV, GEMINI_API_KEY: "k-gem" });
+body = await r.text();
+check("google array-shaped errors read cleanly", r.status === 404 && body.includes("google said 404: model not found"), body.trim());
+
+stub(okStream(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n']));
 r = await get("/models");
 body = await r.text();
 check("/models lists web", body.includes("web"));
-const cols = body.trim().split("\n").map((l) => l.indexOf("groq:") >= 0 ? l.indexOf("groq:") : l.indexOf("anthropic:"));
+// Where the provider:model column starts, whatever the provider is called.
+const cols = body.trim().split("\n").map((l) => l.search(/\S+:\S/));
 check("/models columns line up whatever the alias lengths", new Set(cols).size === 1, JSON.stringify(cols));
 r = await worker.fetch(new Request("https://ask.dev/", { headers: { "user-agent": "Mozilla/5.0" } }), { ...ENV, ASK_MODEL: "web" });
 check("a searching default says so in the docs", (await r.text()).includes("answering with groq openai/gpt-oss-120b + web search"));
