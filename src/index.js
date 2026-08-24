@@ -1,4 +1,4 @@
-import { ALIASES, HttpError, apiKeyFor, ask, defaultAlias, defaultModel, resolveModel, searchCapable } from "./providers.js";
+import { ALIASES, ALIAS_WIDTH, HttpError, apiKeyFor, ask, defaultAlias, defaultModel, resolveModel, searchCapable } from "./providers.js";
 import { clientScript } from "./client.js";
 import { palette, wantsColor } from "./color.js";
 import { TURN_MARK, buildChatMessages, buildMessages } from "./prompt.js";
@@ -45,7 +45,7 @@ async function route(request, env) {
     const current = defaultAlias(env);
     const lines = Object.entries(ALIASES).map(([n, a]) => {
       const id = `${a.provider}:${a.model}`;
-      return `${c.cmd(n.padEnd(7))} ${id}${n === current ? c.note("  (default)") : ""}`;
+      return `${c.cmd(n.padEnd(ALIAS_WIDTH))} ${id}${n === current ? c.note("  (default)") : ""}`;
     });
     return text(lines.join("\n") + "\n");
   }

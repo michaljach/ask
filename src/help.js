@@ -1,4 +1,4 @@
-import { ALIASES } from "./providers.js";
+import { ALIASES, ALIAS_WIDTH } from "./providers.js";
 import { BANNER } from "./banner.js";
 
 // Generated scripts always talk https to a public host. Someone typing
@@ -43,7 +43,7 @@ export function help(url, model, c) {
   const h = url.host || "ask.example.workers.dev";
   const origin = scriptOrigin(url);
   const aliases = Object.entries(ALIASES)
-    .map(([name, a]) => `  ${name.padEnd(7)} ${a.provider}:${a.model}`)
+    .map(([name, a]) => `  ${name.padEnd(ALIAS_WIDTH)} ${a.provider}:${a.model}`)
     .join("\n");
 
   return `

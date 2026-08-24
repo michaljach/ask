@@ -35,6 +35,10 @@ export const ALIASES = {
   // Groq's built-in browser_search, which only the gpt-oss family accepts - qwen
   // rejects built-in tools outright, so asking for search switches model.
   web:    { provider: "groq",      model: "openai/gpt-oss-120b",  effort: "low", search: true },
+  // Groq's agentic model searches natively - no tools parameter, and it must not be
+  // sent one. Slower and roughly 1.6x the tokens of web, so it is not the default,
+  // but it searches differently and is worth having for a second opinion.
+  compound: { provider: "groq",    model: "groq/compound",        search: true },
 };
 
 // "fast" | "groq:openai/gpt-oss-120b" | "claude-opus-5" (bare model, default provider)
@@ -82,11 +86,20 @@ export function defaultAlias(env) {
   return ALIASES[want] ? want : null;
 }
 
-// Groq's browser_search is a built-in tool the gpt-oss family accepts; everything
-// else 400s on it, so say so up front rather than forwarding a cryptic upstream error.
+// Two ways to reach the web on Groq: the gpt-oss family accepts the built-in
+// browser_search tool, and compound searches on its own. Everything else 400s on a
+// tools parameter, so say so up front rather than forwarding a cryptic upstream error.
 export function searchCapable(model) {
+  return /gpt-oss/.test(model) || /compound/.test(model);
+}
+
+// Only the gpt-oss family takes the tool; compound rejects a tools parameter.
+function needsSearchTool(model) {
   return /gpt-oss/.test(model);
 }
+
+// Width of the longest alias name, so listings line up without a magic number.
+export const ALIAS_WIDTH = Math.max(...Object.keys(ALIASES).map((n) => n.length));
 
 export class HttpError extends Error {
   constructor(status, message) {
@@ -118,7 +131,7 @@ export async function ask(opts) {
 async function askOpenAICompat({ provider, base, model, effort, messages, stream, maxTokens, key, signal, showThinking, prefix, search }) {
   const body = {
     model,
-    messages: [{ role: "system", content: systemPrompt(new Date()) }, ...messages],
+    messages: [{ role: "system", content: systemPrompt(new Date(), search) }, ...messages],
     max_tokens: maxTokens,
     stream,
   };
@@ -126,7 +139,7 @@ async function askOpenAICompat({ provider, base, model, effort, messages, stream
   // differ per family (gpt-oss: low/medium/high, qwen3: none/default), so the alias
   // carries the value and this just decides whether to send it at all.
   if (effort && /gpt-oss|qwen3/.test(model)) body.reasoning_effort = effort;
-  if (search) body.tools = [{ type: "browser_search" }];
+  if (search && needsSearchTool(model)) body.tools = [{ type: "browser_search" }];
 
   const headers = { "content-type": "application/json" };
   if (key) headers.authorization = `Bearer ${key}`;
@@ -162,7 +175,7 @@ async function askOpenAICompat({ provider, base, model, effort, messages, stream
 async function askAnthropic({ base, model, effort, messages, stream, maxTokens, key, signal, showThinking, prefix }) {
   const body = {
     model,
-    system: systemPrompt(new Date()),
+    system: systemPrompt(new Date(), false),
     messages,
     max_tokens: maxTokens,
     stream,

@@ -276,6 +276,9 @@ await get("/?q=x&m=web");
 sent = captured.at(-1);
 check("web alias asks groq for browser_search", JSON.stringify(sent.body.tools) === '[{"type":"browser_search"}]', JSON.stringify(sent.body.tools));
 check("web alias uses a gpt-oss model", sent.body.model === "openai/gpt-oss-120b");
+check("the search prompt is only sent when search is on", sent.body.messages[0].content.includes("You have a web search tool"));
+await get("/?q=x&m=qwen");
+check("no search prompt without search", !captured.at(-1).body.messages[0].content.includes("web search tool"));
 
 await get("/?q=x&web=1");
 check("web=1 with no model picks the search-capable alias", captured.at(-1).body.model === "openai/gpt-oss-120b");
@@ -295,8 +298,18 @@ r = await get("/?q=x&m=web");
 body = await r.text();
 check("citation brackets stripped across chunk boundaries", body === "kernel 7.1.10 is latest.\n\n", JSON.stringify(body));
 
+await get("/?q=x&m=compound");
+sent = captured.at(-1);
+check("compound searches without a tools parameter", !("tools" in sent.body) && sent.body.model === "groq/compound", JSON.stringify(sent.body.tools));
+check("compound still gets the search prompt", sent.body.messages[0].content.includes("You have a web search tool"));
+await get("/?q=x&m=compound&web=1");
+check("web=1 on compound is allowed, not a 400", captured.at(-1).body.model === "groq/compound");
+
 r = await get("/models");
-check("/models lists web", (await r.text()).includes("web"));
+body = await r.text();
+check("/models lists web", body.includes("web"));
+const cols = body.trim().split("\n").map((l) => l.indexOf("groq:") >= 0 ? l.indexOf("groq:") : l.indexOf("anthropic:"));
+check("/models columns line up whatever the alias lengths", new Set(cols).size === 1, JSON.stringify(cols));
 r = await worker.fetch(new Request("https://ask.dev/", { headers: { "user-agent": "Mozilla/5.0" } }), { ...ENV, ASK_MODEL: "web" });
 check("a searching default says so in the docs", (await r.text()).includes("answering with groq openai/gpt-oss-120b + web search"));
 

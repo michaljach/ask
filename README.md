@@ -134,6 +134,7 @@ The installed client takes `-m` before the question: `ask -m smart why wont pacs
 | `think` | `groq:openai/gpt-oss-120b`, high reasoning effort |
 | `qwen` | `groq:qwen/qwen3.6-27b` |
 | `web` | `groq:openai/gpt-oss-120b` with Groq's built-in `browser_search` (default) |
+| `compound` | `groq:groq/compound`, searches natively; slower and ~1.6x the tokens |
 | `claude` | `anthropic:claude-opus-5` |
 
 `curl ask.example.com/models` lists them. `m=` also takes `provider:model`
