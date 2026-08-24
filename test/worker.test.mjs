@@ -28,7 +28,7 @@ function check(name, cond, extra = "") {
   else { fail++; console.log(`  FAIL ${name}${extra ? "  -> " + extra : ""}`); }
 }
 
-const ENV = { GROQ_API_KEY: "k-groq", ANTHROPIC_API_KEY: "k-ant", ASK_RATE_LIMIT: { limit: async () => ({ success: true }) } };
+const ENV = { GROQ_API_KEY: "k-groq", GEMINI_API_KEY: "k-gem", ASK_RATE_LIMIT: { limit: async () => ({ success: true }) } };
 const get = (path, env = ENV) => worker.fetch(new Request("https://ask.dev" + path), env);
 
 // ---- routing ----
@@ -196,31 +196,6 @@ check("ASK_TOKEN gate passes with the token", r.status === 200);
 r = await get("/", { ...ENV, ASK_TOKEN: "s3cret" });
 check("help is readable on a private instance", r.status === 200);
 
-// ---- anthropic adapter ----
-console.log("\nanthropic adapter");
-stub(okStream([
-  'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"secret"}}\n\n',
-  'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"pacstrap /mnt base"}}\n\n',
-]));
-r = await get("/?q=x&m=claude");
-body = await r.text();
-check("only text_delta is printed", body === "pacstrap /mnt base\n", JSON.stringify(body));
-sent = captured.at(-1);
-check("hits /v1/messages", sent.url === "https://api.anthropic.com/v1/messages");
-check("x-api-key header", sent.init.headers["x-api-key"] === "k-ant");
-check("anthropic-version header", sent.init.headers["anthropic-version"] === "2023-06-01");
-check("server-side-fallback beta header", sent.init.headers["anthropic-beta"] === "server-side-fallback-2026-07-01");
-check("model is claude-opus-5", sent.body.model === "claude-opus-5");
-check("effort low via output_config", sent.body.output_config.effort === "low");
-check("fallbacks default", sent.body.fallbacks === "default");
-check("no temperature (400 on opus 5)", !("temperature" in sent.body));
-check("no thinking.budget_tokens (400 on opus 5)", !sent.body.thinking);
-check("system is top-level, not a message", typeof sent.body.system === "string" && sent.body.messages[0].role === "user");
-
-stub(() => Response.json({ stop_reason: "refusal", stop_details: { category: "cyber" }, content: [] }));
-r = await get("/?q=x&m=claude&n=1");
-check("refusal surfaces as one readable line", (await r.text()).includes("declined to answer that (cyber)"));
-
 // ---- upstream errors ----
 console.log("\nupstream errors");
 stub(() => new Response(JSON.stringify({ error: { message: "model_decommissioned" } }), { status: 400 }));
@@ -243,6 +218,65 @@ stub(okStream(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n']));
 r = await worker.fetch(new Request("https://ask.dev/why+is+cpu+at+50%+idle"), ENV);
 check("stray % in the path does not 500", r.status === 200, String(r.status));
 check("malformed escape falls back to the raw path", captured.at(-1).body.messages[1].content.includes("cpu at 50%"));
+
+// ---- search done by the worker ----
+console.log("\nworker-side search");
+const EXA = { ...ENV, EXA_API_KEY: "k-exa", GEMINI_API_KEY: "k-gem", ASK_MODEL: "flash" };
+const exaHit = {
+  results: [
+    { title: "Kernel 7.1.10 released", url: "https://kernel.org/notes", publishedDate: "2026-08-23T00:00:00Z", text: "  7.1.10  is now\n stable " },
+  ],
+};
+// One request now makes two calls, so the stub answers by destination.
+const stubSearch = (searchBody, llm) =>
+  stub((rec) =>
+    rec.url.includes("exa.ai")
+      ? (typeof searchBody === "function" ? searchBody() : Response.json(searchBody))
+      : llm(),
+  );
+
+stubSearch(exaHit, okStream(['data: {"choices":[{"delta":{"content":"7.1.10"}}]}\n\n']));
+r = await worker.fetch(new Request("https://ask.dev/?q=latest%20kernel&web=1"), EXA);
+body = await r.text();
+check("search runs and the answer comes back", r.status === 200 && body.includes("7.1.10"), JSON.stringify(body));
+const exaCall = captured.find((c) => c.url.includes("exa.ai"));
+check("exa gets the right endpoint and key", exaCall.url === "https://api.exa.ai/search" && exaCall.init.headers["x-api-key"] === "k-exa");
+check("exa is asked for the pending question", exaCall.body.query === "latest kernel", JSON.stringify(exaCall.body.query));
+check("exa is asked for text contents", exaCall.body.contents?.text?.maxCharacters > 0 && exaCall.body.numResults > 0);
+
+const llmCall = captured.at(-1);
+check("the default model answers, no switch to groq", llmCall.body.model === "gemini-3.6-flash", llmCall.body.model);
+check("no provider tool is sent when we searched here", !("tools" in llmCall.body));
+const asked = llmCall.body.messages.at(-1).content;
+check("snippets are appended to the question", asked.startsWith("latest kernel") && asked.includes("Web results for"), JSON.stringify(asked.slice(0, 60)));
+check("result host is shown, not a bare url", asked.includes("kernel.org") && asked.includes("(2026-08-23)"));
+check("snippet whitespace is collapsed", asked.includes("7.1.10 is now stable"), JSON.stringify(asked.slice(-60)));
+check("the prompt says results are attached", llmCall.body.messages[0].content.includes("Fresh web results are appended"));
+
+// A dead search should still produce an answer.
+stubSearch(() => new Response(JSON.stringify({ error: "over quota" }), { status: 429 }),
+  okStream(['data: {"choices":[{"delta":{"content":"from memory"}}]}\n\n']));
+r = await worker.fetch(new Request("https://ask.dev/?q=x&web=1"), EXA);
+body = await r.text();
+check("a failed search degrades with a note, not a 502", r.status === 200 && body.includes("exa search said 429: over quota") && body.includes("from memory"), JSON.stringify(body.slice(0, 90)));
+check("no results prompt when the search failed", !captured.at(-1).body.messages[0].content.includes("Fresh web results"));
+
+stubSearch({ results: [] }, okStream(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n']));
+r = await worker.fetch(new Request("https://ask.dev/?q=x&web=1"), EXA);
+check("empty results say so", (await r.text()).includes("found nothing"));
+
+// An explicit search-capable model still uses its own tool.
+stub(okStream(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n']));
+await worker.fetch(new Request("https://ask.dev/?q=x&m=web"), EXA);
+check("m=web still uses the provider tool", JSON.stringify(captured.at(-1).body.tools) === '[{"type":"browser_search"}]');
+check("only one call when the model searches itself", !captured.some((c) => c.url.includes("exa.ai") && c === captured.at(-1)));
+
+// Tavily when that is the only key present.
+stub((rec) => rec.url.includes("tavily")
+  ? Response.json({ results: [{ title: "t", url: "https://t.io/x", content: "snippet", published_date: "2026-08-01" }] })
+  : okStream(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'])());
+r = await worker.fetch(new Request("https://ask.dev/?q=x&web=1"), { ...ENV, TAVILY_API_KEY: "k-tav", GEMINI_API_KEY: "k-gem", ASK_MODEL: "flash" });
+check("tavily works as the engine too", r.status === 200 && captured.some((c) => c.url === "https://api.tavily.com/search"));
 
 // ---- <think> tags in the content stream ----
 console.log("\nthink tags");
@@ -288,7 +322,7 @@ check("no tools sent when search was not asked for", !("tools" in captured.at(-1
 
 r = await get("/?q=x&m=qwen&web=1");
 body = await r.text();
-check("search on a model that cannot do it -> clear 400", r.status === 400 && body.includes("cannot search the web; use m=web"), body.trim());
+check("search on a model that cannot do it -> clear 400", r.status === 400 && body.includes("cannot search the web, and no search key is set"), body.trim());
 
 stub(okStream([
   'data: {"choices":[{"delta":{"content":"kernel 7.1.10 is latest\\u30101"}}]}\n\n',
@@ -321,6 +355,10 @@ body = await r.text();
 check("google array-shaped errors read cleanly", r.status === 404 && body.includes("google said 404: model not found"), body.trim());
 
 stub(okStream(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n']));
+for (const gone of ["openrouter", "cerebras", "together", "deepseek", "mistral", "openai", "anthropic"]) {
+  r = await get(`/?q=x&m=${gone}:some-model`);
+  check(`${gone} is no longer a provider`, r.status === 400 && (await r.text()).includes(`unknown provider "${gone}"`));
+}
 r = await get("/models");
 body = await r.text();
 check("/models lists web", body.includes("web"));
@@ -337,7 +375,7 @@ await get("/?q=x&m=qwen");
 sent = captured.at(-1);
 check("qwen alias hits groq", sent.url === "https://api.groq.com/openai/v1/chat/completions" && sent.body.model === "qwen/qwen3.6-27b");
 check("qwen asks for no reasoning at all", sent.body.reasoning_effort === "none", JSON.stringify(sent.body.reasoning_effort));
-await get("/?q=x&m=claude");
+await get("/?q=x&m=lite");
 check("no reasoning_effort sent to a model that would reject it", !("reasoning_effort" in (captured.at(-1).body || {})));
 
 stub(okStream(['data: {"choices":[{"delta":{"content":"<think>truncated mid thou"}}]}\n\n']));
@@ -348,7 +386,8 @@ await worker.fetch(new Request("https://ask.dev/?q=x&m=google:gemini-3-flash"), 
 sent = captured.at(-1);
 check("google provider uses the OpenAI-compatible base", sent.url === "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", sent.url);
 check("google provider sends the key as a bearer token", sent.init.headers.authorization === "Bearer k-gem");
-r = await get("/?q=x&m=google:gemini-3-flash");
+const noGem = { GROQ_API_KEY: ENV.GROQ_API_KEY, ASK_RATE_LIMIT: ENV.ASK_RATE_LIMIT };
+r = await worker.fetch(new Request("https://ask.dev/?q=x&m=google:gemini-3-flash"), noGem);
 check("google without a key -> 501 naming GEMINI_API_KEY", r.status === 501 && (await r.text()).includes("GEMINI_API_KEY"));
 
 r = await get("/models");
@@ -373,10 +412,9 @@ check("transcript with no question -> 400", r.status === 400 && (await r.text())
 r = await worker.fetch(new Request("https://ask.dev/?c=1", { method: "POST", body: ">>> hi\nanswer\n" }), ENV);
 check("transcript ending in an answer -> 400", r.status === 400);
 
-await worker.fetch(new Request("https://ask.dev/?c=1&m=claude", { method: "POST", body: transcript }), ENV);
-msgs = captured.at(-1).body.messages;
-check("anthropic gets alternating roles, no system in messages",
-  msgs.map((m) => m.role).join(",") === "user,assistant,user" && typeof captured.at(-1).body.system === "string");
+await worker.fetch(new Request("https://ask.dev/?c=1", { method: "POST", body: transcript }), ENV);
+msgs = captured.at(-1).body.messages.filter((m) => m.role !== "system");
+check("turns stay strictly alternating", msgs.map((m) => m.role).join(",") === "user,assistant,user", msgs.map((m) => m.role).join(","));
 
 const longSession = ">>> old question\n" + "x".repeat(25_000) + "\n>>> what now\n";
 r = await worker.fetch(new Request("https://ask.dev/?c=1", { method: "POST", body: longSession }), ENV);
@@ -403,6 +441,14 @@ body = await r.text();
 check("/repl serves a sh script", body.startsWith("#!/bin/sh") && body.includes("ask>"));
 check("/repl colours only when stdout is a tty", body.includes("[ -t 1 ]") && body.includes("NO_COLOR"));
 check("/repl uses red, no green", body.includes("[1;31m") && !body.includes("[1;32m"));
+r = await worker.fetch(new Request("https://ask.dev/s"), { ...ENV, EXA_API_KEY: "k", ASK_MODEL: "flash", GEMINI_API_KEY: "k" });
+body = await r.text();
+check("/repl offers ? for search when search is available", body.includes("start a question with ? to search") && body.includes("&web=1"));
+r = await worker.fetch(new Request("https://ask.dev/s"), { ...ENV, ASK_MODEL: "flash", GEMINI_API_KEY: "k" });
+check("/repl hides the hint when nothing can search", !(await r.text()).includes("start a question with ?"));
+// restore: later checks assert on the plain /repl body
+r = await get("/repl");
+body = await r.text();
 check("/repl banner names the model", body.includes("answering with groq openai/gpt-oss-20b"));
 check("/repl prints the banner via a quoted heredoc", body.includes("ASK_BANNER_END"));
 check("/repl embeds the host it was fetched from", body.includes('HOST="https://ask.dev"'));

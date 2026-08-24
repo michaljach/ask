@@ -5,7 +5,7 @@ import { TURN_MARK } from "./prompt.js";
 //   curl -s <origin>/repl | sh
 // Nothing is written to disk except a transcript in a temp file, removed on exit.
 // Questions are read from /dev/tty because stdin is the pipe carrying this script.
-export function replScript(origin, model) {
+export function replScript(origin, model, canSearch) {
   return `#!/bin/sh
 # ask - a question/answer session over curl. Quit with a blank line or ctrl-d.
 HOST="${origin}"
@@ -33,14 +33,20 @@ ASK_BANNER_END
 printf '%b' "$C_OFF" > /dev/tty
 printf 'session on %s\\n' "$HOST" > /dev/tty
 printf '%banswering with ${model} - follow-ups remember what was said%b\\n' "$C_DIM" "$C_OFF" > /dev/tty
-printf '%bblank line or ctrl-d quits%b\\n\\n' "$C_DIM" "$C_OFF" > /dev/tty
+printf '%bblank line or ctrl-d quits%b\\n' "$C_DIM" "$C_OFF" > /dev/tty
+${canSearch ? `printf '%bstart a question with ? to search the web first%b\\n' "$C_DIM" "$C_OFF" > /dev/tty\n` : ""}printf '\\n' > /dev/tty
 
 while :; do
   printf '%bask>%b ' "$C_ASK" "$C_OFF" > /dev/tty
   IFS= read -r q < /dev/tty || { printf '\\n' > /dev/tty; break; }
   [ -z "$q" ] && break
+  # A leading ? asks for a web search on this question only.
+  url="$HOST/?c=1"
+  case "$q" in
+    \\?*) url="$HOST/?c=1&web=1"; q=\${q#\\?} ;;
+  esac
   printf '%s\\n' "${TURN_MARK}$q" >> "$T"
-  curl -sN "$HOST/?c=1" --data-binary @"$T" | tee -a "$T"
+  curl -sN "$url" --data-binary @"$T" | tee -a "$T"
 done
 `;
 }

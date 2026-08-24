@@ -1,6 +1,7 @@
 import { ALIASES, ALIAS_WIDTH, HttpError, apiKeyFor, ask, defaultAlias, defaultModel, resolveModel, searchCapable } from "./providers.js";
 import { clientScript } from "./client.js";
 import { palette, wantsColor } from "./color.js";
+import { formatResults, searchEngine, webSearch } from "./search.js";
 import { TURN_MARK, buildChatMessages, buildMessages } from "./prompt.js";
 import { replScript } from "./repl.js";
 import { help, rootScript, scriptOrigin } from "./help.js";
@@ -38,7 +39,10 @@ async function route(request, env) {
   if (slug === "health") return text("ok\n");
   if (slug === "sh") return text(clientScript(scriptOrigin(url)));
   // /s is the short alias; typing it is the whole point.
-  if (slug === "repl" || slug === "s") return text(replScript(scriptOrigin(url), defaultModel(env)));
+  if (slug === "repl" || slug === "s") {
+    const canSearch = Boolean(searchEngine(env)) || searchCapable(resolveModel("", env).model);
+    return text(replScript(scriptOrigin(url), defaultModel(env), canSearch));
+  }
   const c = palette(wantsColor(request, params));
 
   if (slug === "models") {
@@ -104,18 +108,43 @@ async function route(request, env) {
     return text(`ask: question is ${asked.length} chars, max is ${MAX_QUESTION}\n`, 413);
   }
 
-  // web=1 with no explicit model picks the search-capable alias for you.
+  // Searching here keeps the search budget separate from the token budget, so it is
+  // preferred when a key is configured - and it means the default model answers
+  // rather than web=1 having to switch to one that can search for itself.
   const askedForSearch = params.get("web") === "1";
-  const spec = params.get("m") || (askedForSearch ? "web" : "");
+  const engine = searchEngine(env);
+  const spec = params.get("m") || (askedForSearch && !engine ? "web" : "");
   const { provider, base, model, effort, search } = resolveModel(spec, env);
+
   const useSearch = Boolean(search || askedForSearch);
-  if (useSearch && !searchCapable(model)) {
-    return text(`ask: ${model} cannot search the web; use m=web\n`, 400);
+  const nativeSearch = useSearch && searchCapable(model);
+  const hereSearch = useSearch && !nativeSearch && Boolean(engine);
+  if (useSearch && !nativeSearch && !hereSearch) {
+    return text(`ask: ${model} cannot search the web, and no search key is set; use m=web\n`, 400);
   }
   const key = apiKeyFor(provider, env, byoKey);
   const stream = !(params.get("n") === "1" || params.get("s") === "0");
   const showThinking = params.get("think") === "1";
   const maxTokens = clampTokens(params.get("t"));
+
+  // Search on the pending question, then hand the snippets to the model as context.
+  // A failed search should degrade to an unsearched answer with a note, not a 502:
+  // an answer from memory beats no answer at a terminal.
+  let searched = false;
+  if (hereSearch && pending) {
+    try {
+      const results = await webSearch(engine, pending.content, env, request.signal);
+      const block = formatResults(pending.content, results, new Date());
+      if (block) {
+        pending.content = `${pending.content}\n\n${block}`;
+        searched = true;
+      } else {
+        notice += `ask: ${engine} found nothing, answering without it\n\n`;
+      }
+    } catch (err) {
+      notice += `ask: ${err.message}, answering without it\n\n`;
+    }
+  }
 
   const result = await ask({
     provider,
@@ -128,7 +157,8 @@ async function route(request, env) {
     key,
     signal: request.signal,
     showThinking,
-    search: useSearch,
+    search: nativeSearch,
+    promptMode: nativeSearch ? "tool" : searched ? "results" : null,
     prefix: notice,
   });
 

@@ -26,16 +26,25 @@ Rules:
 // statement about its own capabilities: asked for news it would say it cannot browse,
 // or hand back a curl of an RSS feed, even with the search tool attached. So when
 // search is on, say so explicitly and say what to do with it.
-const SEARCH_PROMPT = `You have a web search tool. Use it whenever the answer depends on
+const RESULTS_PROMPT = `Fresh web results are appended to the question below. Answer from
+them, not from memory, whenever the question depends on something current. Never say you
+cannot browse or check the web: the results are right there. Name the source domain when
+it matters. If the results do not actually answer the question, say that in one line
+rather than guessing.`;
+
+const TOOL_PROMPT = `You have a web search tool. Use it whenever the answer depends on
 something current - news, headlines, released versions, dates, prices, whether a bug is
 fixed - and answer with what you find. Never say you cannot browse or check the web, and
 never tell them to open a browser: they have no browser, that is why they are asking you.
 When they ask for information, give them the information itself rather than a command
 that would fetch it, unless they asked how to fetch it.`;
 
-export function systemPrompt(now, search) {
+// mode: "tool" when the model searches for itself, "results" when this worker
+// already did the searching, null when there is no web access at all.
+export function systemPrompt(now, mode) {
   const parts = [BASE_PROMPT];
-  if (search) parts.push(SEARCH_PROMPT);
+  if (mode === "tool") parts.push(TOOL_PROMPT);
+  if (mode === "results") parts.push(RESULTS_PROMPT);
   parts.push(`The current date and time is ${now.toISOString()} (UTC).`);
   return parts.join("\n\n");
 }

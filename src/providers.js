@@ -3,24 +3,16 @@ import { systemPrompt } from "./prompt.js";
 // Every provider here speaks the OpenAI /chat/completions shape, so one adapter
 // covers all of them. Anthropic uses /v1/messages and gets its own adapter below.
 export const PROVIDERS = {
-  groq:       { base: "https://api.groq.com/openai/v1", env: "GROQ_API_KEY",       kind: "openai" },
-  cerebras:   { base: "https://api.cerebras.ai/v1",     env: "CEREBRAS_API_KEY",   kind: "openai" },
-  openrouter: { base: "https://openrouter.ai/api/v1",   env: "OPENROUTER_API_KEY", kind: "openai" },
-  together:   { base: "https://api.together.xyz/v1",    env: "TOGETHER_API_KEY",   kind: "openai" },
-  deepseek:   { base: "https://api.deepseek.com/v1",    env: "DEEPSEEK_API_KEY",   kind: "openai" },
-  mistral:    { base: "https://api.mistral.ai/v1",      env: "MISTRAL_API_KEY",    kind: "openai" },
-  openai:     { base: "https://api.openai.com/v1",      env: "OPENAI_API_KEY",     kind: "openai" },
-  // Gemini through Google's OpenAI-compatible layer, so the same adapter works.
-  // Model ids move fast; no alias points here on purpose. List what your key can
-  // reach with:
+  groq:   { base: "https://api.groq.com/openai/v1", env: "GROQ_API_KEY" },
+  // Gemini through Google's OpenAI-compatible layer, so one adapter covers it.
+  // Model ids move fast; list what a key can reach rather than trusting one:
   //   curl -H "Authorization: Bearer $GEMINI_API_KEY" \
   //     https://generativelanguage.googleapis.com/v1beta/openai/models
-  google:     { base: "https://generativelanguage.googleapis.com/v1beta/openai",
-                env: "GEMINI_API_KEY", kind: "openai" },
-  anthropic:  { base: "https://api.anthropic.com/v1",   env: "ANTHROPIC_API_KEY",  kind: "anthropic" },
+  google: { base: "https://generativelanguage.googleapis.com/v1beta/openai", env: "GEMINI_API_KEY" },
   // Anything else that speaks the OpenAI shape: ollama, llama.cpp, vLLM, LM Studio,
-  // a private gateway. Base URL comes from ASK_CUSTOM_BASE; the key is optional.
-  custom:     { base: null,                             env: "CUSTOM_API_KEY",     kind: "openai", keyOptional: true },
+  // OpenRouter, Cerebras, a private gateway. Base URL comes from ASK_CUSTOM_BASE and
+  // the key is optional, so reaching a new provider needs a secret, not a code change.
+  custom: { base: null, env: "CUSTOM_API_KEY", keyOptional: true },
 };
 
 // Short names people can actually remember at 2am with no browser open.
@@ -31,7 +23,6 @@ export const ALIASES = {
   // qwen3 accepts only none or default here, unlike gpt-oss. Left thinking on, it
   // spends the whole answer budget deliberating and gets truncated mid-thought.
   qwen:   { provider: "groq",      model: "qwen/qwen3.6-27b",     effort: "none" },
-  claude: { provider: "anthropic", model: "claude-opus-5",       effort: "low" },
   // Groq's built-in browser_search, which only the gpt-oss family accepts - qwen
   // rejects built-in tools outright, so asking for search switches model.
   web:    { provider: "groq",      model: "openai/gpt-oss-120b",  effort: "low", search: true },
@@ -44,11 +35,14 @@ export const ALIASES = {
   // through the OpenAI-compatible layer at all, and the native endpoint answers
   // 429 quota-exceeded for a grounded call on a free key while ungrounded calls
   // succeed. So web=1 still routes to Groq.
+  // Measured on the same question: flash took 14s and 429s at 20 requests/min,
+  // flash-lite answered in 0.7s with the same answer, and follows the prompt just
+  // as well. Speed is the whole point at a shell prompt, so lite is the default.
   flash:  { provider: "google",    model: "gemini-3.6-flash" },
   lite:   { provider: "google",    model: "gemini-3.1-flash-lite" },
 };
 
-// "fast" | "groq:openai/gpt-oss-120b" | "claude-opus-5" (bare model, default provider)
+// "lite" | "groq:openai/gpt-oss-120b" | "gemini-3.6-flash" (bare model, default provider)
 export function resolveModel(spec, env) {
   const want = (spec || env.ASK_MODEL || "fast").trim();
 
@@ -130,15 +124,10 @@ export function apiKeyFor(provider, env, byoKey) {
   return key;
 }
 
-export async function ask(opts) {
-  const spec = PROVIDERS[opts.provider];
-  return spec.kind === "anthropic" ? askAnthropic(opts) : askOpenAICompat(opts);
-}
-
-async function askOpenAICompat({ provider, base, model, effort, messages, stream, maxTokens, key, signal, showThinking, prefix, search }) {
+export async function ask({ provider, base, model, effort, messages, stream, maxTokens, key, signal, showThinking, prefix, search, promptMode }) {
   const body = {
     model,
-    messages: [{ role: "system", content: systemPrompt(new Date(), search) }, ...messages],
+    messages: [{ role: "system", content: systemPrompt(new Date(), promptMode) }, ...messages],
     max_tokens: maxTokens,
     stream,
   };
@@ -174,63 +163,6 @@ async function askOpenAICompat({ provider, base, model, effort, messages, stream
       if (!delta) return null;
       if (delta.content) return strip(delta.content);
       if (showThinking && delta.reasoning) return delta.reasoning;
-      return null;
-    }),
-  };
-}
-
-async function askAnthropic({ base, model, effort, messages, stream, maxTokens, key, signal, showThinking, prefix }) {
-  const body = {
-    model,
-    system: systemPrompt(new Date(), false),
-    messages,
-    max_tokens: maxTokens,
-    stream,
-    // Thinking is on by default on Opus 5 and the raw chain of thought is never
-    // returned, so a short answer just needs a low effort setting. No temperature
-    // and no thinking.budget_tokens - both are rejected on this model family.
-    output_config: { effort: effort || "low" },
-    // Route around safety refusals server-side instead of handing the user a
-    // dead end at a terminal with no browser.
-    fallbacks: "default",
-  };
-  if (showThinking) body.thinking = { type: "adaptive", display: "summarized" };
-
-  const res = await fetch(`${base}/messages`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "server-side-fallback-2026-07-01",
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
-
-  await throwIfUpstreamError(res, "anthropic");
-
-  if (!stream) {
-    const json = await readJson(res, "anthropic");
-    if (json.stop_reason === "refusal") {
-      return { text: `declined to answer that (${json.stop_details?.category || "unspecified"})\n` };
-    }
-    const text = (json.content || [])
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("");
-    return { text: text || "(empty response)\n" };
-  }
-
-  return {
-    stream: sseToText(res.body, prefix, (event) => {
-      if (event.type === "content_block_delta") {
-        if (event.delta?.type === "text_delta") return event.delta.text;
-        if (showThinking && event.delta?.type === "thinking_delta") return event.delta.thinking;
-      }
-      if (event.type === "message_delta" && event.delta?.stop_reason === "refusal") {
-        return "\ndeclined to answer that\n";
-      }
       return null;
     }),
   };

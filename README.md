@@ -135,9 +135,8 @@ The installed client takes `-m` before the question: `ask -m smart why wont pacs
 | `qwen` | `groq:qwen/qwen3.6-27b` |
 | `web` | `groq:openai/gpt-oss-120b` with Groq's built-in `browser_search` |
 | `compound` | `groq:groq/compound`, searches natively; slower and ~1.6x the tokens |
-| `flash` | `google:gemini-3.6-flash` (default) |
-| `lite` | `google:gemini-3.1-flash-lite` |
-| `claude` | `anthropic:claude-opus-5` |
+| `flash` | `google:gemini-3.6-flash`, slower and capped at 20 req/min |
+| `lite` | `google:gemini-3.1-flash-lite` (default) |
 
 `curl ask.example.com/models` lists them. `m=` also takes `provider:model`
 directly, so you are not limited to the aliases:
@@ -151,25 +150,45 @@ Model ids go stale. Ask the provider what it serves today:
 
 ### Web search
 
-`web=1` lets the model look things up before answering, which is the whole point
-when the reason you are at a bare terminal is that you have no browser:
+`web=1` searches the web first, which is the whole point when the reason you are at a
+bare terminal is that you have no browser:
 
 ```sh
 curl "ask.example.com/?web=1" -d "what is the latest stable kernel"
 ```
 
-**The default cannot search.** Gemini carries ordinary questions because its free
-tier is far roomier than Groq's 8,000 tokens/min and 200,000 tokens/day, but Google
-Search grounding is not reachable: the OpenAI-compatible layer rejects the tool
-outright, and the native endpoint answers `429 quota exceeded` for a grounded call on
-a free key while ungrounded calls on the same key succeed. So `web=1` routes to Groq,
-and search is bounded by Groq's daily budget.
+There are two ways it can happen, and which one you get depends on what is configured.
 
-It runs Groq's built-in `browser_search`, which only the `gpt-oss` family accepts —
-qwen rejects built-in tools outright — so `web=1` switches model for you, and asking
-for search on a model that cannot do it returns a clear 400 rather than forwarding a
-cryptic upstream error. Results come back cited in CJK brackets, which get stripped
-along with any `<think>` blocks.
+**Searching here (preferred).** Set `EXA_API_KEY` or `TAVILY_API_KEY` and the Worker
+runs the search itself, then hands the snippets to whichever model is default. This
+keeps the two budgets apart: with a model-bundled search every query spends the same
+tokens the answers come from — about 4,700 of Groq's 200,000 per day, so roughly 42
+searches — whereas Exa's free tier is 20,000 requests a month and the model only pays
+for the snippets it reads. It also means the default model answers, instead of `web=1`
+having to switch to one that can search for itself.
+
+```sh
+npx wrangler secret put EXA_API_KEY      # free key from exa.ai, no card
+```
+
+Five results, 700 characters each, shown to the model with the source host and date
+rather than a full URL — nobody can click a link in a terminal. A search that fails or
+returns nothing degrades to an unsearched answer with a one-line note, because an
+answer from memory beats no answer.
+
+**The model searching for itself.** With no search key set, `web=1` falls back to
+Groq's built-in `browser_search`, which only the `gpt-oss` family accepts — qwen
+rejects built-in tools outright — so `web=1` switches model for you. Asking for search
+on a model that cannot do it, with no key set either, returns a clear 400.
+
+`m=web` always uses the provider's own tool even when a search key is set: naming a
+model explicitly wins.
+
+**Gemini cannot search at all.** Google Search grounding is not reachable on a free
+key: the OpenAI-compatible layer rejects the tool outright, and the native endpoint
+answers `429 quota exceeded` for a grounded call while ungrounded calls on the same key
+succeed. That is why searching here matters — it gives Gemini's roomy free tier a way
+to answer current questions.
 
 ## Providers
 
@@ -179,15 +198,19 @@ OpenAI `/chat/completions` shape except Anthropic, which has its own adapter.
 | `provider:` | Secret |
 |---|---|
 | `groq` | `GROQ_API_KEY` |
-| `anthropic` | `ANTHROPIC_API_KEY` |
-| `openrouter` | `OPENROUTER_API_KEY` |
-| `cerebras` | `CEREBRAS_API_KEY` |
-| `together` | `TOGETHER_API_KEY` |
-| `deepseek` | `DEEPSEEK_API_KEY` |
-| `mistral` | `MISTRAL_API_KEY` |
-| `openai` | `OPENAI_API_KEY` |
 | `google` | `GEMINI_API_KEY` (Gemini via its OpenAI-compatible layer) |
 | `custom` | `CUSTOM_API_KEY` (optional) + `ASK_CUSTOM_BASE` |
+
+Anything else that speaks the OpenAI shape — OpenRouter, Cerebras, Together,
+DeepSeek, Mistral, an ollama box on your LAN — goes through `custom`, so reaching a
+new provider is a secret and a base URL, not a code change.
+
+Search engines, used by `web=1` when set (first match wins):
+
+| Engine | Secret | Free tier |
+|---|---|---|
+| Exa | `EXA_API_KEY` | 20,000 requests/month, no card |
+| Tavily | `TAVILY_API_KEY` | 1,000/month, no card |
 
 No alias points at `google`: Gemini model ids move fast, so list what your key can
 reach rather than trusting a hardcoded one, then use `m=google:<model>`.
@@ -228,6 +251,7 @@ src/prompt.js     the system prompt that makes answers terminal-shaped
 src/help.js       the usage screen you get when you curl it with no question
 src/client.js     the shell client served at /sh
 src/repl.js       the session loop served at /s (and /repl)
+src/search.js     web search done here, so it does not spend the answer budget
 test/worker.test.mjs
 ```
 
@@ -251,7 +275,7 @@ fdisk /dev/sda
 ```
 
 The worker turns that into proper alternating user/assistant turns, merging any
-same-role neighbours so the Anthropic API stays happy. A transcript that does not
+same-role neighbours so turns stay strictly alternating. A transcript that does not
 end on a question is a 400. Long sessions are trimmed from the oldest end, and a
 partial leading turn is discarded rather than misparsed.
 
