@@ -61,6 +61,14 @@ export function defaultModel(env) {
   }
 }
 
+// Which alias name is the configured default, or null when the default is a raw
+// model id. Compared by name, not by provider+model: smart and think resolve to
+// the same model and differ only in reasoning effort.
+export function defaultAlias(env) {
+  const want = (env.ASK_MODEL || "fast").trim();
+  return ALIASES[want] ? want : null;
+}
+
 export class HttpError extends Error {
   constructor(status, message) {
     super(message);

@@ -128,8 +128,8 @@ The installed client takes `-m` before the question: `ask -m smart why wont pacs
 
 | Alias | Resolves to |
 |---|---|
-| `fast` | `groq:openai/gpt-oss-20b` (default) |
-| `smart` | `groq:openai/gpt-oss-120b` |
+| `fast` | `groq:openai/gpt-oss-20b` |
+| `smart` | `groq:openai/gpt-oss-120b` (default) |
 | `think` | `groq:openai/gpt-oss-120b`, high reasoning effort |
 | `claude` | `anthropic:claude-opus-5` |
 

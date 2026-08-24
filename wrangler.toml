@@ -20,7 +20,7 @@ namespace_id = "1001"
 
 [vars]
 ASK_PROVIDER = "groq"
-ASK_MODEL = "fast"
+ASK_MODEL = "smart"
 
 # Secrets are not set here. Set them with:
 #   npx wrangler secret put GROQ_API_KEY
