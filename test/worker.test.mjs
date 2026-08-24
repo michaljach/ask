@@ -244,6 +244,56 @@ r = await worker.fetch(new Request("https://ask.dev/why+is+cpu+at+50%+idle"), EN
 check("stray % in the path does not 500", r.status === 200, String(r.status));
 check("malformed escape falls back to the raw path", captured.at(-1).body.messages[1].content.includes("cpu at 50%"));
 
+// ---- <think> tags in the content stream ----
+console.log("\nthink tags");
+stub(okStream([
+  'data: {"choices":[{"delta":{"content":"<thi"}}]}\n\n',
+  'data: {"choices":[{"delta":{"content":"nk>\\nreasoning\\n"}}]}\n\n',
+  'data: {"choices":[{"delta":{"content":"more</thi"}}]}\n\n',
+  'data: {"choices":[{"delta":{"content":"nk>\\n\\nss -tuln\\n"}}]}\n\n',
+]));
+r = await get("/?q=x&m=qwen");
+body = await r.text();
+check("think block stripped even when tags split across chunks", body === "ss -tuln\n\n", JSON.stringify(body));
+
+stub(okStream(['data: {"choices":[{"delta":{"content":"<think>hidden</think>\\nanswer"}}]}\n\n']));
+r = await get("/?q=x&m=qwen&think=1");
+check("think=1 keeps the block", (await r.text()).includes("hidden"));
+
+stub(() => Response.json({ choices: [{ message: { content: "<think>a\nb</think>\n\nss -tuln" } }] }));
+r = await get("/?q=x&m=qwen&n=1");
+body = await r.text();
+check("non-streaming strips the block too", body === "ss -tuln\n", JSON.stringify(body));
+
+stub(okStream(['data: {"choices":[{"delta":{"content":"use <thing> not a tag"}}]}\n\n']));
+r = await get("/?q=x");
+check("a tag-lookalike passes through", (await r.text()).includes("<thing>"));
+
+// ---- new providers and aliases ----
+console.log("\nproviders");
+stub(okStream(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n']));
+await get("/?q=x&m=qwen");
+sent = captured.at(-1);
+check("qwen alias hits groq", sent.url === "https://api.groq.com/openai/v1/chat/completions" && sent.body.model === "qwen/qwen3.6-27b");
+check("qwen asks for no reasoning at all", sent.body.reasoning_effort === "none", JSON.stringify(sent.body.reasoning_effort));
+await get("/?q=x&m=claude");
+check("no reasoning_effort sent to a model that would reject it", !("reasoning_effort" in (captured.at(-1).body || {})));
+
+stub(okStream(['data: {"choices":[{"delta":{"content":"<think>truncated mid thou"}}]}\n\n']));
+r = await get("/?q=x&m=qwen");
+check("an all-reasoning reply says so instead of streaming nothing", (await r.text()).includes("used its whole budget reasoning"));
+
+await worker.fetch(new Request("https://ask.dev/?q=x&m=google:gemini-3-flash"), { ...ENV, GEMINI_API_KEY: "k-gem" });
+sent = captured.at(-1);
+check("google provider uses the OpenAI-compatible base", sent.url === "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", sent.url);
+check("google provider sends the key as a bearer token", sent.init.headers.authorization === "Bearer k-gem");
+r = await get("/?q=x&m=google:gemini-3-flash");
+check("google without a key -> 501 naming GEMINI_API_KEY", r.status === 501 && (await r.text()).includes("GEMINI_API_KEY"));
+
+r = await get("/models");
+body = await r.text();
+check("/models lists qwen", body.includes("qwen/qwen3.6-27b"));
+
 // ---- sessions ----
 console.log("\nsessions (c=1)");
 stub(okStream(['data: {"choices":[{"delta":{"content":"ok"}}]}\n\n']));

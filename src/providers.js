@@ -10,6 +10,13 @@ export const PROVIDERS = {
   deepseek:   { base: "https://api.deepseek.com/v1",    env: "DEEPSEEK_API_KEY",   kind: "openai" },
   mistral:    { base: "https://api.mistral.ai/v1",      env: "MISTRAL_API_KEY",    kind: "openai" },
   openai:     { base: "https://api.openai.com/v1",      env: "OPENAI_API_KEY",     kind: "openai" },
+  // Gemini through Google's OpenAI-compatible layer, so the same adapter works.
+  // Model ids move fast; no alias points here on purpose. List what your key can
+  // reach with:
+  //   curl -H "Authorization: Bearer $GEMINI_API_KEY" \
+  //     https://generativelanguage.googleapis.com/v1beta/openai/models
+  google:     { base: "https://generativelanguage.googleapis.com/v1beta/openai",
+                env: "GEMINI_API_KEY", kind: "openai" },
   anthropic:  { base: "https://api.anthropic.com/v1",   env: "ANTHROPIC_API_KEY",  kind: "anthropic" },
   // Anything else that speaks the OpenAI shape: ollama, llama.cpp, vLLM, LM Studio,
   // a private gateway. Base URL comes from ASK_CUSTOM_BASE; the key is optional.
@@ -21,6 +28,9 @@ export const ALIASES = {
   fast:   { provider: "groq",      model: "openai/gpt-oss-20b",  effort: "low" },
   smart:  { provider: "groq",      model: "openai/gpt-oss-120b", effort: "medium" },
   think:  { provider: "groq",      model: "openai/gpt-oss-120b", effort: "high" },
+  // qwen3 accepts only none or default here, unlike gpt-oss. Left thinking on, it
+  // spends the whole answer budget deliberating and gets truncated mid-thought.
+  qwen:   { provider: "groq",      model: "qwen/qwen3.6-27b",     effort: "none" },
   claude: { provider: "anthropic", model: "claude-opus-5",       effort: "low" },
 };
 
@@ -103,9 +113,10 @@ async function askOpenAICompat({ provider, base, model, effort, messages, stream
     max_tokens: maxTokens,
     stream,
   };
-  // gpt-oss on Groq understands reasoning_effort; other models 400 on it, so only
-  // send it when the alias asked for it.
-  if (effort && /gpt-oss/.test(model)) body.reasoning_effort = effort;
+  // Only these families accept reasoning_effort; others 400 on it. The valid values
+  // differ per family (gpt-oss: low/medium/high, qwen3: none/default), so the alias
+  // carries the value and this just decides whether to send it at all.
+  if (effort && /gpt-oss|qwen3/.test(model)) body.reasoning_effort = effort;
 
   const headers = { "content-type": "application/json" };
   if (key) headers.authorization = `Bearer ${key}`;
@@ -118,18 +129,20 @@ async function askOpenAICompat({ provider, base, model, effort, messages, stream
   });
 
   await throwIfUpstreamError(res, provider);
+  const strip = showThinking ? (t) => t : thinkStripper();
 
   if (!stream) {
     const json = await readJson(res, provider);
-    const choice = json.choices?.[0];
-    return { text: choice?.message?.content || "(empty response)\n" };
+    const raw = json.choices?.[0]?.message?.content || "";
+    const out = showThinking ? raw : stripThinkBlocks(raw);
+    return { text: out.trim() ? out : "(empty response)\n" };
   }
 
   return {
     stream: sseToText(res.body, prefix, (event) => {
       const delta = event.choices?.[0]?.delta;
       if (!delta) return null;
-      if (delta.content) return delta.content;
+      if (delta.content) return strip(delta.content);
       if (showThinking && delta.reasoning) return delta.reasoning;
       return null;
     }),
@@ -218,6 +231,59 @@ async function throwIfUpstreamError(res, provider) {
   throw new HttpError(status, `${provider} said ${res.status}: ${detail}`);
 }
 
+// Some reasoning models (qwen3, the r1 distills) put their chain of thought in the
+// content stream wrapped in <think> tags rather than in a separate field. Nobody at
+// a terminal wants 40 lines of deliberation before one command, so strip it. Stateful
+// and streaming: a tag can be split across chunks, so hold back any tail that could
+// still turn out to be the start of one.
+const OPEN = "<think>";
+const CLOSE = "</think>";
+
+function partialTail(text, tag) {
+  for (let n = Math.min(tag.length - 1, text.length); n > 0; n--) {
+    if (tag.startsWith(text.slice(text.length - n))) return n;
+  }
+  return 0;
+}
+
+export function thinkStripper() {
+  let inside = false;
+  let carry = "";
+  return (text) => {
+    let rest = carry + text;
+    carry = "";
+    let out = "";
+    for (;;) {
+      if (!inside) {
+        const at = rest.indexOf(OPEN);
+        if (at === -1) {
+          const keep = partialTail(rest, OPEN);
+          out += rest.slice(0, rest.length - keep);
+          carry = rest.slice(rest.length - keep);
+          break;
+        }
+        out += rest.slice(0, at);
+        rest = rest.slice(at + OPEN.length);
+        inside = true;
+      } else {
+        const at = rest.indexOf(CLOSE);
+        if (at === -1) {
+          carry = rest.slice(rest.length - partialTail(rest, CLOSE));
+          break;
+        }
+        // Drop the blank lines the model leaves behind after the block.
+        rest = rest.slice(at + CLOSE.length).replace(/^\s+/, "");
+        inside = false;
+      }
+    }
+    return out;
+  };
+}
+
+export function stripThinkBlocks(text) {
+  return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
+}
+
 // Turn a provider's SSE body into a plain-text stream. `pick` pulls the printable
 // piece out of each event and returns null for events we do not care about.
 // A TransformStream (rather than a hand-rolled ReadableStream) guarantees every
@@ -228,6 +294,7 @@ function sseToText(body, prefix, pick) {
   const encoder = new TextEncoder();
   let buffer = "";
 
+  let emitted = false;
   const emit = (controller, line) => {
     if (!line.startsWith("data:")) return;
     const payload = line.slice(5).trim();
@@ -239,7 +306,10 @@ function sseToText(body, prefix, pick) {
       return; // a partial or non-JSON keepalive frame; nothing to print
     }
     const chunk = pick(event);
-    if (chunk) controller.enqueue(encoder.encode(chunk));
+    if (chunk) {
+      emitted = true;
+      controller.enqueue(encoder.encode(chunk));
+    }
   };
 
   return body.pipeThrough(
@@ -256,6 +326,13 @@ function sseToText(body, prefix, pick) {
       flush(controller) {
         const tail = buffer.trim();
         if (tail) emit(controller, tail);
+        if (!emitted) {
+          // Everything the model sent was reasoning, usually because it hit the
+          // token cap mid-thought. Silence would look like a broken endpoint.
+          controller.enqueue(
+            encoder.encode("(no answer - the model used its whole budget reasoning; try t=2000 or m=smart)"),
+          );
+        }
         // Land the shell prompt on its own line.
         controller.enqueue(encoder.encode("\n"));
       },

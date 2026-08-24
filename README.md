@@ -131,6 +131,7 @@ The installed client takes `-m` before the question: `ask -m smart why wont pacs
 | `fast` | `groq:openai/gpt-oss-20b` |
 | `smart` | `groq:openai/gpt-oss-120b` (default) |
 | `think` | `groq:openai/gpt-oss-120b`, high reasoning effort |
+| `qwen` | `groq:qwen/qwen3.6-27b` |
 | `claude` | `anthropic:claude-opus-5` |
 
 `curl ask.example.com/models` lists them. `m=` also takes `provider:model`
@@ -158,7 +159,16 @@ OpenAI `/chat/completions` shape except Anthropic, which has its own adapter.
 | `deepseek` | `DEEPSEEK_API_KEY` |
 | `mistral` | `MISTRAL_API_KEY` |
 | `openai` | `OPENAI_API_KEY` |
+| `google` | `GEMINI_API_KEY` (Gemini via its OpenAI-compatible layer) |
 | `custom` | `CUSTOM_API_KEY` (optional) + `ASK_CUSTOM_BASE` |
+
+No alias points at `google`: Gemini model ids move fast, so list what your key can
+reach rather than trusting a hardcoded one, then use `m=google:<model>`.
+
+```sh
+curl -H "Authorization: Bearer $GEMINI_API_KEY" \
+  https://generativelanguage.googleapis.com/v1beta/openai/models
+```
 
 `custom` points at any OpenAI-compatible endpoint — ollama, llama.cpp, vLLM,
 LM Studio, a private gateway:
